@@ -1,39 +1,136 @@
 # Toto - Time Series Optimized Transformer for Observability
-[Paper](https://arxiv.org/abs/2505.14766) | [Toto Model Card](https://huggingface.co/Datadog/Toto-Open-Base-1.0) | [BOOM Dataset Card](https://huggingface.co/datasets/Datadog/BOOM) | [Blogpost](https://www.datadoghq.com/blog/ai/toto-boom-unleashed/)
 
-Toto is a foundation model for multivariate time series forecasting with a focus on observability metrics. This model leverages innovative architectural designs to efficiently handle the high-dimensional, complex time series that are characteristic of observability data.
+**Toto 2.0**: [Model Weights](https://huggingface.co/collections/Datadog/toto-open-20) | Blog (coming soon)  
+**Toto 1.0**: [Paper](https://arxiv.org/abs/2505.14766) | [Blog](https://www.datadoghq.com/blog/ai/toto-boom-unleashed/) | [Model Card](https://huggingface.co/Datadog/Toto-Open-Base-1.0)
+
+Toto is a foundation model for multivariate time series forecasting with a focus on observability metrics. **Toto 2.0** is the current recommended release, featuring a family of u-μP-scaled models ranging from 4M to 2.5B parameters.
 
 This repository also hosts the code for evaluating time series models on BOOM (**B**enchmark **o**f **O**bservability **M**etrics), a large-scale forecasting dataset composed of real-world observability data.
 
-## Updates
+### Updates
 
-- 🎉🎉 **[Feb 2026] Fine-tuning Support**: You can now fine-tune Toto on your own datasets! Includes a ready-to-use training script, example configs, and a hands-on tutorial notebook to get you started.
-- 📈 **[Feb 2026] Exogenous Covariate Support**: Toto now supports known future exogenous covariates (e.g., weather forecasts, scheduled events) during both fine-tuning and inference to improve forecasting accuracy.
+- **[Apr 2026]** Toto 2.0 released — five model sizes from 4M to 2.5B parameters.
+- **[Feb 2026]** Fine-tuning support added to Toto 1.0 (training script, configs, and tutorial notebook).
+- **[Feb 2026]** Exogenous covariate support added to Toto 1.0 for fine-tuning and inference.
+
 
 ## Table of Contents
 - [Updates](#updates)
-- [Toto model](#toto-model)
+- [Toto 2.0](#toto-20)
   - [Features](#features)
   - [Model Weights](#model-weights)
   - [Installation](#installation)
   - [Quick Start](#quick-start)
   - [Tutorials](#tutorials)
-  - [Pre-Training Data](#pre-training-data)
   - [Evaluation](#evaluation)
+  - [Requirements](#requirements)
+- [dd-unit-scaling](#dd-unit-scaling)
+- [Toto 1.0 (Legacy)](#toto-10-legacy)
+  - [Features](#features-1)
+  - [Pre-Training Data](#pre-training-data)
+  - [Evaluation](#evaluation-1)
     - [LSF Evaluation](#lsf-evaluation)
     - [GIFT-Eval Evaluation](#gift-eval-evaluation)
     - [BOOM Evaluation](#boom-evaluation)
-  - [🆕 Fine-tuning](#-fine-tuning)
-    - [Running the Fine-tuning Script](#running-the-fine-tuning-script)
-    - [Configuration](#configuration)
+  - [Fine-tuning](#fine-tuning)
     - [Custom Datasets](#custom-datasets)
-  - [Requirements](#requirements)
+    - [Evaluations on FEV Datasets](#evaluations-on-fev-datasets)
+  - [Requirements](#requirements-1)
+  - [Citation (1.0)](#citation-10)
 - [BOOM (Benchmark of Observability Metrics)](#boom-benchmark-of-observability-metrics)
 - [Citation](#citation)
 - [License](#license)
 - [Contributing](#contributing)
 
-## Toto model
+## Toto 2.0
+
+Toto 2.0 is the latest generation, featuring a u-μP-scaled transformer with alternating time/variate attention and quantile-based probabilistic forecasting.
+
+> **Note:** Fine-tuning and exogenous variable (EV) support are planned for a future 2.0 release but not yet available. If you need these features today, use [Toto 1.0](#toto-10-legacy).
+
+### Features
+
+- **Zero-Shot Forecasting**: Perform forecasting without fine-tuning on your specific time series.
+- **State-of-the-Art Performance**: Achieves top scores on diverse benchmarks, including the multi-domain [GIFT-Eval](https://huggingface.co/spaces/Salesforce/GIFT-Eval) benchmark and our observability-focused [BOOM](https://huggingface.co/datasets/Datadog/BOOM) benchmark.
+- **Multi-Variate Support**: Efficiently process multiple variables using alternating time/variate attention.
+- **Probabilistic Predictions**: Generate both point forecasts and uncertainty estimates via a quantile head.
+- **High-Dimensional Support**: Handle time series with a large number of variables efficiently.
+- **Decoder-Only Architecture**: Supports variable prediction horizons and context lengths.
+
+> **Inference tips for `forecast()`:**
+> - **`decode_block_size`** selects the decoding strategy:
+>   - `None` (single forward pass): faster, better for short-term accuracy. Used for all leaderboard results.
+>   - e.g. `768` (block decode): better long-term stability for horizons ≳1000. Default in the quick start and notebooks.
+> - **`has_missing_values=False`** (when your context has no gaps) enables Flash Attention kernels for a meaningful speedup. Leave as `True` (default) if `target_mask` contains any `False` entries.
+
+### Model Weights
+| Checkpoint | Parameters |
+|---|---|
+| [Toto-2.0-4m](https://huggingface.co/Datadog/Toto-2.0-4m) | 4M |
+| [Toto-2.0-22m](https://huggingface.co/Datadog/Toto-2.0-22m) | 22M |
+| [Toto-2.0-313m](https://huggingface.co/Datadog/Toto-2.0-313m) | 313M |
+| [Toto-2.0-1B](https://huggingface.co/Datadog/Toto-2.0-1B) | 1B |
+| [Toto-2.0-2.5B](https://huggingface.co/Datadog/Toto-2.0-2.5B) | 2.5B |
+
+### Installation
+
+```bash
+pip install "toto-2 @ git+https://github.com/DataDog/toto.git#subdirectory=toto2"
+```
+
+### Quick Start
+
+```python
+import torch
+from toto2 import Toto2Model
+
+model = Toto2Model.from_pretrained("Datadog/Toto-2.0-22m")
+model = model.to("cuda").eval()
+
+# (batch, n_variates, time_steps)
+target = torch.randn(1, 1, 512, device="cuda")
+target_mask = torch.ones_like(target, dtype=torch.bool)
+series_ids = torch.zeros(1, 1, dtype=torch.long, device="cuda")
+
+# Returns quantiles of shape (9, batch, n_variates, horizon)
+# Quantile levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+quantiles = model.forecast(
+    {"target": target, "target_mask": target_mask, "series_ids": series_ids},
+    horizon=96,
+    decode_block_size=768,
+    has_missing_values=False,
+)
+```
+
+### Tutorials
+
+- [Quick Start](toto2/notebooks/quick_start.ipynb): Load a model, forecast, plot results, handle missing values and multivariate inputs.
+- [GluonTS Integration](toto2/notebooks/gluonts_integration.ipynb): Use `Toto2GluonTSModel` with GluonTS evaluation pipelines and built-in datasets.
+
+### Evaluation
+
+- [GIFT-Eval Notebook](https://github.com/SalesforceAIResearch/gift-eval/blob/main/notebooks/toto_2_0.ipynb): Evaluate Toto 2.0 on the GIFT-Eval benchmark.
+- [BOOM Evaluation Notebook](boom/notebooks/toto.ipynb) and [BOOM README](boom/README.md): Evaluate Toto 2.0 on the BOOM benchmark.
+
+### Requirements
+
+- Python 3.10+
+- PyTorch 2.5+
+- CUDA-capable device (Ampere generation or newer recommended for optimal performance)
+
+## dd-unit-scaling
+
+This repository also includes [`dd-unit-scaling`](dd_unit_scaling/), a compile-friendly, world-size-aware extension of [graphcore-research/unit-scaling](https://github.com/graphcore-research/unit-scaling). It is used internally by Toto 2.0 to make u-μP work correctly with `torch.compile` and FSDP2. See the [dd-unit-scaling README](dd_unit_scaling/README.md) for details.
+
+---
+
+<details>
+<summary><h2>Toto 1.0 (Legacy)</h2></summary>
+
+> Toto 1.0 is the previous generation of Toto. It is still the right choice if you need **fine-tuning** or **exogenous variable** support, which are planned for 2.0 but not yet available.
+
+[Toto 1.0 Model Card](https://huggingface.co/Datadog/Toto-Open-Base-1.0) | [BOOM Dataset Card](https://huggingface.co/datasets/Datadog/BOOM)
+
 
 ### Features
 
@@ -46,16 +143,11 @@ This repository also hosts the code for evaluating time series models on BOOM (*
 - **Decoder-Only Architecture**: Support for variable prediction horizons and context lengths
 - **Pre-trained on Massive Data**: Trained on over 2 trillion time series data points, the largest pretraining dataset for any open-weights time series foundation model to date.
 
-
 ### Model Weights
-
-Toto-Open, the open-weights release of Toto, is available on Hugging Face. Currently available checkpoints:
 
 | Checkpoint | Parameters | Notes |
 |------------|------------|-------|
-| [Toto-Open-Base-1.0](https://huggingface.co/Datadog/Toto-Open-Base-1.0) | 151M | The initial open relase of Toto. Achieves state-of-the-art performance on both general-purpose and observability-focused benchmarking tasks, as described in our paper. |
-
-
+| [Toto-Open-Base-1.0](https://huggingface.co/Datadog/Toto-Open-Base-1.0) | 151M | The initial open release of Toto. Achieves state-of-the-art performance on both general-purpose and observability-focused benchmarking tasks, as described in our paper. |
 
 ### Installation
 
@@ -79,10 +171,6 @@ pip install -e .
 For optimal inference speed, it's recommended to install [xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers) and [flash-attention](https://github.com/Dao-AILab/flash-attention?tab=readme-ov-file#installation-and-features) as well.
 
 ### Quick Start
-
-Here's a simple example to get you started with forecasting:
-
-⚠️ In our study, we take the **median** across 256 samples to produce a point forecast. This tutorial previously used the **mean** but has now been updated.
 
 ```python
 import torch
@@ -132,8 +220,6 @@ upper_quantile = forecast.quantile(0.9)  # 90th percentile for upper confidence 
 
 ### Tutorials
 
-For a comprehensive guide on using Toto for time series forecasting, check out our tutorial notebooks:
-
 - [Basic Inference Tutorial](toto/notebooks/inference_tutorial.ipynb): Learn how to load the model and make forecasts
 - [Fine-tuning Tutorial](toto/notebooks/finetuning_tutorial.ipynb): Learn how to fine-tune Toto on custom datasets with or without exogenous covariates
 
@@ -154,8 +240,8 @@ To improve the performance of Toto on general-purpose time series forecasting ac
 #### Synthetic Data
 To improve robustness, approximately 1/3 of the pretraining data mix consists of synthetically-generated time series.
 
-
 ### Evaluation
+
 Toto has been rigorously evaluated on multiple benchmarks, including both general-purpose datasets and observability-focused datasets like BOOM. Below, we provide instructions for reproducing our evaluation results.
 
 #### LSF Evaluation
@@ -193,7 +279,6 @@ python toto/evaluation/run_lsf_eval.py \
     --checkpoint-path [CHECKPOINT-NAME-OR-DIR]
 ```
 
-
 To see all available options for the evaluation script, you can use the `--help` flag:
 
 ```bash
@@ -202,7 +287,6 @@ python toto/evaluation/run_lsf_eval.py --help
 
 ##### Expected Results
 The script evaluates Toto's performance using Mean Absolute Error (MAE) and Mean Squared Error (MSE) across the specified datasets, context lengths, and prediction lengths. It displays a detailed table of results for each prediction length, along with a summary table that averages the results across prediction lengths for each dataset.
-
 
 To reproduce the results presented in the paper, use the default arguments while setting `--eval-stride 1` and specifying all datasets with `--datasets ETTh1 ETTh2 ETTm1 ETTm2 weather electricity`.
 
@@ -219,9 +303,7 @@ For evaluating Toto on the BOOM (Benchmark of Observability Metrics) dataset, re
 - [BOOM Evaluation Notebook](boom/notebooks/toto.ipynb): Example workflow for running Toto on the BOOM dataset.
 - [BOOM README](boom/README.md): Detailed instructions and scripts for benchmarking on BOOM.
 
-These resources provide all necessary steps to run and reproduce BOOM evaluation results with Toto.
-
-### 🆕 Fine-tuning
+### Fine-tuning
 
 Toto can be fine-tuned on your own domain-specific datasets to improve performance on specialized forecasting tasks. The fine-tuning pipeline supports both standard time series and datasets with exogenous (known future) variables.
 
@@ -307,7 +389,7 @@ _ = train(module, dm, config)
 
 #### Evaluations on FEV Datasets
 
-The [benchmark_finetuning.py](toto/scripts/benchmark_finetuning.py) script evaluates Toto on a subset of FEV datasets that are not included in Toto’s pretraining corpus. These datasets contain known exogenous variables, enabling a comparison of three approaches:
+The [benchmark_finetuning.py](toto/scripts/benchmark_finetuning.py) script evaluates Toto on a subset of FEV datasets that are not included in Toto's pretraining corpus. These datasets contain known exogenous variables, enabling a comparison of three approaches:
 
 - **Zero-shot Toto** — No fine-tuning
 - **Fine-tuned Toto** — Fine-tuned without exogenous variables
@@ -321,20 +403,38 @@ Models are evaluated using sliding windows on the test set (10% of each dataset)
 | Toto (fine-tuned) | <u>5397.929</u> | <u>0.100</u> | <u>0.574</u> |
 | Toto (fine-tuned + exogenous) | **5117.002** | **0.096** | **0.535** |
 
-
-
 ### Requirements
 
 - Python 3.10+
 - PyTorch 2.5+
 - CUDA-capable device (Ampere generation or newer recommended for optimal performance)
 
+### Citation (1.0)
+
+If you use Toto 1.0 in your research, please cite:
+
+```bibtex
+@misc{cohen2025timedifferentobservabilityperspective,
+      title={This Time is Different: An Observability Perspective on Time Series Foundation Models},
+      author={Ben Cohen and Emaad Khwaja and Youssef Doubli and Salahidine Lemaachi and Chris Lettieri and Charles Masson and Hugo Miccinilli and Elise Ramé and Qiqi Ren and Afshin Rostamizadeh and Jean Ogier du Terrail and Anna-Monica Toon and Kan Wang and Stephan Xie and Zongzhe Xu and Viktoriya Zhukova and David Asker and Ameet Talwalkar and Othmane Abou-Amal},
+      year={2025},
+      eprint={2505.14766},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2505.14766},
+}
+```
+
+</details>
+
 ## BOOM (Benchmark of Observability Metrics)
+
+BOOM is used for evaluating both Toto 1.0 and 2.0.
 
 **BOOM** (**B**enchmark **o**f **O**bservability **M**etrics) is a large-scale, real-world time series dataset designed for evaluating models on forecasting tasks in complex observability environments.
 Composed of real-world metrics data collected from Datadog, a leading observability platform, the benchmark captures the irregularity, structural complexity, and heavy-tailed statistics typical of production observability data. Unlike synthetic or curated benchmarks, BOOM reflects the full diversity and unpredictability of operational signals observed in distributed systems, covering infrastructure, networking, databases, security, and application-level metrics.
 
-Note: the metrics comprising BOOM were generated from internal monitoring of pre-production environments, and **do not** include any customer data. 
+Note: the metrics comprising BOOM were generated from internal monitoring of pre-production environments, and **do not** include any customer data.
 
 For more information on the dataset, including details on its preparation and statistical properties, see the [dataset card](https://huggingface.co/datasets/Datadog/BOOM) in Hugging Face.
 
@@ -342,24 +442,18 @@ For example evaluations of different time series models on the BOOM dataset, see
 
 ## Citation
 
-If you use Toto in your research, please cite our work:
+If you use Toto 2.0 in your research or work, please cite:
 
 ```bibtex
-@misc{cohen2025timedifferentobservabilityperspective,
-      title={This Time is Different: An Observability Perspective on Time Series Foundation Models}, 
-      author={Ben Cohen and Emaad Khwaja and Youssef Doubli and Salahidine Lemaachi and Chris Lettieri and Charles Masson and Hugo Miccinilli and Elise Ramé and Qiqi Ren and Afshin Rostamizadeh and Jean Ogier du Terrail and Anna-Monica Toon and Kan Wang and Stephan Xie and Zongzhe Xu and Viktoriya Zhukova and David Asker and Ameet Talwalkar and Othmane Abou-Amal},
-      year={2025},
-      eprint={2505.14766},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2505.14766}, 
-}
+(citation coming soon)
 ```
+
+For Toto 1.0, see the [Toto 1.0 citation](#citation-10).
 
 ## License
 Unless explicitly stated otherwise all files in this repository are licensed under the Apache-2.0 License - see [LICENSE](LICENSE) file for details.
 
-This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2025 Datadog, Inc.
+This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2025-2026 Datadog, Inc.
 
 ## Contributing
 
