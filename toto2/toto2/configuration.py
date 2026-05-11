@@ -5,7 +5,7 @@
 
 import math
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
 
 
 @dataclass
@@ -90,3 +90,6 @@ class Toto2GluonTSModelConfig:
     decode_block_size: Optional[int] = None
     has_missing_values: bool = True
     quantiles: list[float] = field(default_factory=lambda: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+    imputation_internal: Literal["none", "ffill", "linear"] = "ffill"
+    scaler_fallback_min_obs: int = 8
+    quantile_real_cap_k: float = 1e4
