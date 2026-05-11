@@ -19,6 +19,7 @@ from typing import Any, Callable, NamedTuple, NotRequired, Optional, TypedDict
 
 import dd_unit_scaling as uu
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,21 +34,100 @@ from gluonts.transform import (
     TestSplitSampler,
     Transformation,
 )
+from gluonts.transform.feature import (
+    DummyValueImputation,
+    MissingValueImputation,
+)
 from gluonts.transform.split import InstanceSplitter, TFTInstanceSplitter
 from huggingface_hub import PyTorchModelHubMixin, load_torch_model
 from jaxtyping import Bool, Float, Int
 from safetensors.torch import load_file as load_safetensors_file
 
-import dd_unit_scaling as uu
-from dd_unit_scaling import functional as U
-
 from .configuration import Toto2GluonTSModelConfig, Toto2ModelConfig
-
 
 __all__ = [
     "Toto2Model",
     "Toto2GluonTSModel",
 ]
+
+
+# =====================================================================
+# Imputation Utilities
+# =====================================================================
+
+
+def ffill_imputation(values: np.ndarray) -> np.ndarray:
+    """Forward-fill NaN positions along the last axis.  Leading NaN
+    (before the first finite value) are left as 0; they remain masked
+    so the scaler/model ignore them.
+
+    Accepts 1D ``(time,)`` or 2D ``(variate, time)`` arrays and returns an
+    array of the same shape and dtype as the input.
+    """
+    return (
+        pd.DataFrame(values.T)
+        .ffill()
+        .fillna(0)
+        .values.T.reshape(values.shape)
+        .astype(values.dtype)
+    )
+
+
+def linear_imputation(values: np.ndarray) -> np.ndarray:
+    """Linearly interpolate NaN gaps along the last axis.  Trailing NaN
+    (after the last finite value) are forward-filled; leading NaN are
+    left as 0 (both remain masked so the scaler/model ignore them).
+
+    Accepts 1D ``(time,)`` or 2D ``(variate, time)`` arrays and returns an
+    array of the same shape and dtype as the input.
+    """
+    return (
+        pd.DataFrame(values.T)
+        .interpolate()
+        .ffill()
+        .fillna(0)
+        .values.T.reshape(values.shape)
+        .astype(values.dtype)
+    )
+
+
+class _FnImputation(MissingValueImputation):
+    """Adapter to use a plain ndarray callable as a GluonTS imputation method."""
+
+    def __init__(self, fn):
+        self._fn = fn
+
+    def __call__(self, values: np.ndarray) -> np.ndarray:
+        return self._fn(values)
+
+
+def backfill_short_patches(
+    target: Float[torch.Tensor, "*batch time"],
+    loc: Float[torch.Tensor, "*batch time"],
+    scale: Float[torch.Tensor, "*batch time"],
+    obs_mask: Bool[torch.Tensor, "*batch time"],
+    patch_size: int,
+    min_obs: int,
+) -> tuple[Float[torch.Tensor, "*batch time"], Float[torch.Tensor, "*batch time"]]:
+    """Rewrite ``(loc, scale)`` on leading patches whose cumulative
+    observation count is below ``min_obs`` with stats computed over the
+    first ``min_obs`` observed points.  Donor is local to the leading
+    region (later observations don't leak in).  ``min_obs <= 0`` is a
+    no-op; fewer than ``min_obs`` total observations falls back to the
+    available observations with clamped denominators."""
+    if min_obs <= 0:
+        return loc, scale
+    in_first_n = (obs_mask.cumsum(dim=-1) <= min_obs) & obs_mask
+    n = in_first_n.sum(dim=-1, keepdim=True).clamp(min=1)
+    donor_loc = (target * in_first_n).sum(dim=-1, keepdim=True) / n
+    donor_var = (((target - donor_loc) * in_first_n) ** 2).sum(dim=-1, keepdim=True) / (n - 1).clamp(min=1)
+    donor_scale = donor_var.sqrt().clamp(min=1e-6)
+    below = obs_mask.unflatten(-1, (-1, patch_size)).sum(dim=-1).cumsum(dim=-1) < min_obs
+    below_pos = below.repeat_interleave(patch_size, dim=-1)
+    return (
+        torch.where(below_pos, donor_loc.expand_as(loc), loc),
+        torch.where(below_pos, donor_scale.expand_as(scale), scale),
+    )
 
 
 # =====================================================================
@@ -1082,10 +1162,19 @@ class Toto2Model(nn.Module, PyTorchModelHubMixin):
         When decode_block_size is set and the horizon requires multiple
         blocks, uses a KV cache to iteratively decode with median feedback
         between blocks.  The causal scaler is re-run each iteration so
-        loc/scale updates as predicted medians are filled in.
+        loc/scale updates as predicted medians are filled in.  The
+        ``scaler_fallback_min_obs`` kwarg (default 0 = no-op) backfills
+        loc/scale on short-observation leading patches; see
+        ``backfill_short_patches``.
 
+        ``quantile_real_cap_k`` (kwarg, default 0 = disabled) clips each
+        real-space quantile to ``[ctx_min - K*scale, ctx_max + K*scale]``
+        where ``ctx_min/ctx_max`` are the observed context bounds and
+        ``scale`` is the anchor scale at the last context position.
         """
         decode_block_size = kwargs.pop("decode_block_size", 0) or 0
+        fallback_min_obs = kwargs.pop("scaler_fallback_min_obs", 0) or 0
+        cap_k = float(kwargs.pop("quantile_real_cap_k", 0.0) or 0.0)
         has_missing_values = kwargs.pop("has_missing_values", True)
         patch_size = self.config.patch_size
         num_patches = math.ceil(horizon / patch_size)
@@ -1137,14 +1226,44 @@ class Toto2Model(nn.Module, PyTorchModelHubMixin):
         context_x = None
 
         scaled_context = None
-        
+
+        cap_min = cap_max = None
+
         while patches_predicted < num_patches:
             block = min(block_size_patches, num_patches - patches_predicted)
             pred_start = initial_len + patches_predicted * patch_size
             pred_end = pred_start + block * patch_size
 
             _, static_loc, static_scale = self.scaler(full_target, full_mask)
-            
+            if fallback_min_obs > 0:
+                static_loc, static_scale = backfill_short_patches(
+                    full_target, static_loc, static_scale, full_mask,
+                    patch_size, fallback_min_obs,
+                )
+
+            # Build cap once, on the first iteration.  PatchedCausalStdScaler is
+            # causal so the scale at the last context position is invariant to
+            # whatever we later fill in for the prediction region; reusing the
+            # loop's static_scale avoids a second pass over the context.
+            # ctx_buf is also reused across the max / min reductions so we only
+            # allocate one [*batch, n_var, ctx_len] temporary.
+            if cap_k > 0 and cap_min is None:
+                not_obs = ~full_mask[..., :initial_len]
+                ctx_buf = full_target[..., :initial_len].masked_fill(
+                    not_obs, float("-inf")
+                )
+                anchor_k = cap_k * static_scale[..., initial_len - 1 : initial_len]
+                cap_max = (
+                    torch.nan_to_num(ctx_buf.amax(-1, keepdim=True), neginf=0.0)
+                    + anchor_k
+                ).unsqueeze(-1)
+                ctx_buf.masked_fill_(not_obs, float("inf"))
+                cap_min = (
+                    torch.nan_to_num(ctx_buf.amin(-1, keepdim=True), posinf=0.0)
+                    - anchor_k
+                ).unsqueeze(-1)
+                del ctx_buf, not_obs, anchor_k
+
             if scaled_context is None:
                 raw_ctx = (full_target[..., :initial_len] - static_loc[..., :initial_len]) / static_scale[..., :initial_len]
                 scaled_context = torch.where(full_mask[..., :initial_len], raw_ctx, torch.zeros_like(raw_ctx)).asinh()
@@ -1198,6 +1317,8 @@ class Toto2Model(nn.Module, PyTorchModelHubMixin):
             scale = rearrange(static_scale[..., pred_start:pred_end], "... (s p) -> ... s p", p=patch_size)
             block_q_real = block_q.sinh() * scale + loc
             block_q_real = self._clamp_nonfinite(block_q_real)
+            if cap_min is not None:
+                block_q_real.clamp_(cap_min, cap_max)
             block_q_real = block_q_real.sort(dim=0).values
             quantiles[..., patches_predicted : patches_predicted + block, :] = block_q_real
 
@@ -1248,6 +1369,11 @@ class Toto2GluonTSModel(nn.Module):
         self.prediction_length = config.prediction_length
         self.model = model
         self.config = config
+        self.imputation_method: MissingValueImputation = {
+            "ffill": _FnImputation(ffill_imputation),
+            "linear": _FnImputation(linear_imputation),
+            "none": DummyValueImputation(0.0),
+        }[config.imputation_internal]
 
     def forward(
         self,
@@ -1288,6 +1414,8 @@ class Toto2GluonTSModel(nn.Module):
             self.prediction_length,
             decode_block_size=self.config.decode_block_size,
             has_missing_values=self.config.has_missing_values,
+            scaler_fallback_min_obs=self.config.scaler_fallback_min_obs,
+            quantile_real_cap_k=self.config.quantile_real_cap_k,
         )
         outputs = rearrange(
             quantiles[:, :, : past_target.shape[-2], :],
@@ -1308,6 +1436,7 @@ class Toto2GluonTSModel(nn.Module):
             target_field="target",
             output_field="observed_target",
             dtype=bool,
+            imputation_method=self.imputation_method,
         )
         if self.config.feat_dynamic_real_dim > 0:
             transform += AsNumpyArray(field="feat_dynamic_real", expected_ndim=2, dtype=np.float32)

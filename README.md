@@ -1,15 +1,15 @@
 # Toto - Time Series Optimized Transformer for Observability
 
-**Toto 2.0**: [Model Weights](https://huggingface.co/collections/Datadog/toto-open-20) | Blog (coming soon)  
+**Toto 2.0**: [Model Weights](https://huggingface.co/collections/Datadog/toto-20) | [Blog](https://www.datadoghq.com/blog/ai/toto-2/)  
 **Toto 1.0**: [Paper](https://arxiv.org/abs/2505.14766) | [Blog](https://www.datadoghq.com/blog/ai/toto-boom-unleashed/) | [Model Card](https://huggingface.co/Datadog/Toto-Open-Base-1.0)
 
-Toto is a foundation model for multivariate time series forecasting with a focus on observability metrics. **Toto 2.0** is the current recommended release, featuring a family of u-μP-scaled models ranging from 4M to 2.5B parameters.
+Toto is a foundation model for multivariate time series forecasting with a focus on observability metrics. **Toto 2.0** is the current recommended release, featuring a family of u-μP-scaled models ranging from 4m to 2.5B parameters.
 
 This repository also hosts the code for evaluating time series models on BOOM (**B**enchmark **o**f **O**bservability **M**etrics), a large-scale forecasting dataset composed of real-world observability data.
 
 ### Updates
 
-- **[Apr 2026]** Toto 2.0 released — five model sizes from 4M to 2.5B parameters.
+- **[Apr 2026]** 🎉 Toto 2.0 released — five model sizes from 4m to 2.5B parameters.
 - **[Feb 2026]** Fine-tuning support added to Toto 1.0 (training script, configs, and tutorial notebook).
 - **[Feb 2026]** Exogenous covariate support added to Toto 1.0 for fine-tuning and inference.
 
@@ -26,17 +26,6 @@ This repository also hosts the code for evaluating time series models on BOOM (*
   - [Requirements](#requirements)
 - [dd-unit-scaling](#dd-unit-scaling)
 - [Toto 1.0 (Legacy)](#toto-10-legacy)
-  - [Features](#features-1)
-  - [Pre-Training Data](#pre-training-data)
-  - [Evaluation](#evaluation-1)
-    - [LSF Evaluation](#lsf-evaluation)
-    - [GIFT-Eval Evaluation](#gift-eval-evaluation)
-    - [BOOM Evaluation](#boom-evaluation)
-  - [Fine-tuning](#fine-tuning)
-    - [Custom Datasets](#custom-datasets)
-    - [Evaluations on FEV Datasets](#evaluations-on-fev-datasets)
-  - [Requirements](#requirements-1)
-  - [Citation (1.0)](#citation-10)
 - [BOOM (Benchmark of Observability Metrics)](#boom-benchmark-of-observability-metrics)
 - [Citation](#citation)
 - [License](#license)
@@ -66,9 +55,9 @@ Toto 2.0 is the latest generation, featuring a u-μP-scaled transformer with alt
 ### Model Weights
 | Checkpoint | Parameters |
 |---|---|
-| [Toto-2.0-4m](https://huggingface.co/Datadog/Toto-2.0-4m) | 4M |
-| [Toto-2.0-22m](https://huggingface.co/Datadog/Toto-2.0-22m) | 22M |
-| [Toto-2.0-313m](https://huggingface.co/Datadog/Toto-2.0-313m) | 313M |
+| [Toto-2.0-4m](https://huggingface.co/Datadog/Toto-2.0-4m) | 4m |
+| [Toto-2.0-22m](https://huggingface.co/Datadog/Toto-2.0-22m) | 22m |
+| [Toto-2.0-313m](https://huggingface.co/Datadog/Toto-2.0-313m) | 313m |
 | [Toto-2.0-1B](https://huggingface.co/Datadog/Toto-2.0-1B) | 1B |
 | [Toto-2.0-2.5B](https://huggingface.co/Datadog/Toto-2.0-2.5B) | 2.5B |
 
@@ -85,12 +74,13 @@ import torch
 from toto2 import Toto2Model
 
 model = Toto2Model.from_pretrained("Datadog/Toto-2.0-22m")
-model = model.to("cuda").eval()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = model.to(device).eval()
 
 # (batch, n_variates, time_steps)
-target = torch.randn(1, 1, 512, device="cuda")
+target = torch.randn(1, 1, 512, device=device)
 target_mask = torch.ones_like(target, dtype=torch.bool)
-series_ids = torch.zeros(1, 1, dtype=torch.long, device="cuda")
+series_ids = torch.zeros(1, 1, dtype=torch.long, device=device)
 
 # Returns quantiles of shape (9, batch, n_variates, horizon)
 # Quantile levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
