@@ -26,6 +26,8 @@ pip install git+https://github.com/microsoft/dion.git
 
 ## Usage
 
+For a conceptual guide on applying u-μP to your model, see the [unit-scaling demo notebook](https://github.com/graphcore-research/unit-scaling/blob/main/examples/demo.ipynb).
+
 Drop-in replacement for `unit_scaling`:
 
 ```python
@@ -124,6 +126,16 @@ If you use gradient accumulation, also set:
 ```python
 uu.set_grad_accumulation_steps(accum_steps)  # defaults to 1
 ```
+
+### Loss normalization in distributed training
+
+When computing weighted loss averages in DDP/FSDP, apply a world-size correction to maintain hyperparameter stability across different world sizes. After all-reducing the total weight across ranks, divide it by `world_size`:
+
+```python
+loss = loss.sum() / (total_weight / world_size)  # equivalent to: loss * world_size / total_weight
+```
+
+This compensates for DDP's gradient averaging and ensures world-size invariance — your learning rate and other hyperparameters remain stable regardless of how many GPUs you train on.
 
 ## Design note: sequence-length-independent scaling in Toto 2.0
 
