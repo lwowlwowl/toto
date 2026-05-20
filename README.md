@@ -1,6 +1,7 @@
 # Toto - Time Series Optimized Transformer for Observability
 
 **Toto 2.0**: [Technical Report](https://arxiv.org/abs/2605.20119) | [Blog](https://www.datadoghq.com/blog/ai/toto-2/) |  [Model Weights](https://huggingface.co/collections/Datadog/toto-20)
+
 **Toto 1.0**: [Paper](https://arxiv.org/abs/2505.14766) | [Blog](https://www.datadoghq.com/blog/ai/toto-boom-unleashed/) | [Model Card](https://huggingface.co/Datadog/Toto-Open-Base-1.0)
 
 Toto is a foundation model for multivariate time series forecasting with a focus on observability metrics. **Toto 2.0** is the current recommended release, featuring a family of u-μP-scaled models ranging from 4m to 2.5B parameters.
