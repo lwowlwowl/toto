@@ -64,6 +64,8 @@ Toto 2.0 is the latest generation, featuring a u-μP-scaled transformer with alt
 
 ### Installation
 
+Install Toto 2.0 (requires Python 3.12+):
+
 ```bash
 pip install toto-models
 ```
