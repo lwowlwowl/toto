@@ -65,7 +65,7 @@ Toto 2.0 is the latest generation, featuring a u-μP-scaled transformer with alt
 ### Installation
 
 ```bash
-pip install "toto-2 @ git+https://github.com/DataDog/toto.git#subdirectory=toto2"
+pip install toto-models
 ```
 
 ### Quick Start
@@ -105,7 +105,7 @@ quantiles = model.forecast(
 
 ### Requirements
 
-- Python 3.10+
+- Python 3.12+
 - PyTorch 2.5+
 - CUDA-capable device (Ampere generation or newer recommended for optimal performance)
 

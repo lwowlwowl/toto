@@ -15,7 +15,7 @@ The upstream `unit_scaling` library implements u-μP correctly in principle, but
 ## Installation
 
 ```bash
-pip install "dd-unit-scaling @ git+https://github.com/DataDog/toto.git#subdirectory=dd_unit_scaling"
+pip install dd-unit-scaling
 ```
 
 For Muon-family optimizers, also install [dion](https://github.com/microsoft/dion):
