@@ -19,7 +19,7 @@ dependencies = [
     "huggingface-hub>=0.20.0",
     "safetensors>=0.4.0",
     "jaxtyping>=0.2.25",
-    "dd-unit-scaling @ git+https://github.com/DataDog/toto.git#subdirectory=dd_unit_scaling",
+    "dd-unit-scaling>=0.1.0",
     "matplotlib>=3.9.0",
 ]
 
